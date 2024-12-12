@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { generateRefinancingOptions, calculateMonthlyPayment } from './loanCalculator'
+import { generateRefinancingOptions, calculateMonthlyPayment, calculateLoanCosts } from './loanCalculator'
 import { 
   LineChart, Line,
   BarChart, Bar, 
@@ -18,6 +18,8 @@ import {
   FaTimesCircle
 } from 'react-icons/fa'
 import { formatCurrency } from './currencyConverter'
+import { bankRates } from './bankRates';
+import { generateAmortizationSchedule } from './loanCalculator';
 
 // Komponenta za informativni tooltip
 const InfoTooltip = ({ title, description }) => {
@@ -134,6 +136,8 @@ const CustomSlider = ({
   step = 0.1, 
   value, 
   onChange, 
+  onChangeStart, 
+  onChangeEnd, 
   label = 'Trajanje kredita',
   description = 'Odaberite željeno trajanje novog kredita'
 }) => {
@@ -154,6 +158,8 @@ const CustomSlider = ({
         step={step}
         value={value}
         onChange={e => onChange(Number(e.target.value))}
+        onMouseDown={onChangeStart}
+        onMouseUp={onChangeEnd}
         className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
       />
       <p className="mt-1 text-sm text-gray-500">
@@ -177,11 +183,15 @@ function App() {
   const [cumulativeSavingsData, setCumulativeSavingsData] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [desiredLoanTerm, setDesiredLoanTerm] = useState(10)
+  const [amortizationData, setAmortizationData] = useState([])
+  const [selectedBank, setSelectedBank] = useState(null);
 
   const [customOption, setCustomOption] = useState({
     bank: '',
     interestRate: ''
   });
+
+  const [isSliderActive, setIsSliderActive] = useState(false);
 
   const handleCustomOptionChange = (e) => {
     const { name, value } = e.target;
@@ -191,12 +201,28 @@ function App() {
     }));
   };
 
-  useEffect(() => {
-    // Izračunaj opcije refinanciranja samo ako imamo sve potrebne podatke
-    if (currentLoan.remainingDebt && currentLoan.monthlyPayment && currentLoan.repaymentTerm) {
-      calculateSavings()
-    }
-  }, [currentLoan.remainingDebt, currentLoan.monthlyPayment, currentLoan.repaymentTerm, desiredLoanTerm])
+  const handleLoanTermChange = (value) => {
+    // Pretvaranje godina u mjesece za interno čuvanje
+    const termMonths = Math.round(value * 12);
+    
+    setCurrentLoan(prev => ({
+      ...prev,
+      repaymentTerm: termMonths,
+      displayYears: value // Čuvanje izvornog unosa godina
+    }));
+    
+    // Ažuriranje željenog roka otplate za refinanciranje
+    setDesiredLoanTerm(value);
+  };
+
+  const handleSliderStart = () => {
+    setIsSliderActive(true);
+  };
+
+  const handleSliderEnd = () => {
+    setIsSliderActive(false);
+    calculateSavings();
+  };
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -211,6 +237,9 @@ function App() {
           [name]: value * 12, // Pretvaranje godina u mjesece
           displayYears: value // Čuvanje izvornog unosa godina
         };
+        
+        // Ažuriranje željenog roka otplate
+        setDesiredLoanTerm(Number(value));
       } else {
         updates = { [name]: value };
       }
@@ -232,6 +261,13 @@ function App() {
       });
     }
   }
+
+  useEffect(() => {
+    // Izračunaj opcije refinanciranja samo ako imamo sve potrebne podatke i slider nije aktivan
+    if (!isSliderActive && currentLoan.remainingDebt && currentLoan.monthlyPayment && currentLoan.repaymentTerm) {
+      calculateSavings()
+    }
+  }, [currentLoan.remainingDebt, currentLoan.monthlyPayment, currentLoan.repaymentTerm, desiredLoanTerm, isSliderActive])
 
   const calculateSavings = useCallback(() => {
     if (!currentLoan.monthlyPayment || !currentLoan.remainingDebt) return;
@@ -302,6 +338,7 @@ function App() {
     // Sortiramo opcije po ukupnoj uštedi/trošku (od najbolje do najlošije)
     const sortedOptions = processedOptions.sort((a, b) => b.totalSavings - a.totalSavings);
     console.log('Sorted options:', sortedOptions);
+    console.log('Refinancing Options:', sortedOptions.map(option => option.bank));
 
     // Najbolja opcija je prva nakon sortiranja
     const best = sortedOptions.length > 0 ? sortedOptions[0] : null;
@@ -319,40 +356,32 @@ function App() {
 
   // Izračun kumulativne uštede
   const calculateCumulativeSavings = (currentLoan, option) => {
-    const months = Number(currentLoan.repaymentTerm)
-    const currentMonthlyPayment = Number(currentLoan.monthlyPayment)
-    const newMonthlyPayment = option.monthlyPayment
-    
-    const savingsData = []
-    let cumulativeCurrentCost = 0
-    let cumulativeNewCost = 0
+    const currentPrincipal = Number(currentLoan.remainingDebt);
+    const currentInterestRate = Number(currentLoan.interestRate);
+    const currentTermMonths = Number(currentLoan.repaymentTerm);
 
-    for (let month = 1; month <= months; month++) {
-      cumulativeCurrentCost += currentMonthlyPayment
-      cumulativeNewCost += newMonthlyPayment
+    const currentTotalCost = calculateLoanCosts(
+      currentPrincipal, 
+      currentInterestRate, 
+      currentTermMonths
+    );
 
-      // Grupiranje po godinama radi preglednosti grafa
-      const year = Math.ceil(month / 12)
-      
-      // Pronađi ili kreiraj zapis za ovu godinu
-      let yearData = savingsData.find(item => item.year === year)
-      if (!yearData) {
-        yearData = {
-          year,
-          'Trenutni kredit': 0,
-          'Refinanciranje': 0,
-          'Kumulativna ušteda': 0
-        }
-        savingsData.push(yearData)
-      }
+    const newTotalCost = calculateLoanCosts(
+      currentPrincipal, 
+      option.interestRate, 
+      currentTermMonths
+    );
 
-      // Ažuriraj podatke za godinu
-      yearData['Trenutni kredit'] = cumulativeCurrentCost
-      yearData['Refinanciranje'] = cumulativeNewCost
-      yearData['Kumulativna ušteda'] = cumulativeCurrentCost - cumulativeNewCost
-    }
+    const cumulativeSavingsData = Array.from({length: Math.ceil(currentTermMonths/12)}, (_, index) => ({
+      year: index + 1,
+      'Trenutni kredit': currentTotalCost.totalCost,
+      'Refinanciranje': newTotalCost.totalCost,
+      'Kumulativna ušteda': currentTotalCost.totalCost - newTotalCost.totalCost
+    }));
 
-    return savingsData
+    console.log('Cumulative Savings Data:', cumulativeSavingsData);
+
+    return cumulativeSavingsData;
   }
 
   const generateRefinancingRecommendation = () => {
@@ -478,13 +507,15 @@ function App() {
 
       {/* Novi custom slider */}
       <CustomSlider 
-        value={desiredLoanTerm}
-        onChange={setDesiredLoanTerm}
+        min={0.5}
+        max={30}
+        step={0.1}
+        value={currentLoan.displayYears || desiredLoanTerm}
+        onChange={handleLoanTermChange}
+        onChangeStart={handleSliderStart}
+        onChangeEnd={handleSliderEnd}
         label="Željeno trajanje novog kredita"
         description="Odaberite željeno trajanje kredita. Možete odabrati od 4 mjeseca do 30 godina."
-        min={0.3}  // 4 mjeseca
-        max={30}   // 30 godina
-        step={0.1} // Korak od 1-2 mjeseca
       />
 
       {/* Forma za vlastitu opciju */}
@@ -535,7 +566,73 @@ function App() {
         ) : bestOption ? (
           <div className="grid md:grid-cols-3 gap-4">
             {refinancingOptions.map((option, index) => (
-              <div key={index} className="bg-white p-6 rounded-lg shadow mb-4">
+              <div 
+                key={index} 
+                className={`p-4 border rounded-lg cursor-pointer ${
+                  bestOption === option ? 'bg-green-50 border-green-300' : 'hover:bg-gray-50'
+                } ${
+                  selectedBank === option.bank ? 'bg-blue-100 border-blue-300' : ''
+                }`}
+                onClick={() => {
+                  const selectedBankDetails = bankRates.find(bank => 
+                    bank.bank.toLowerCase().includes(option.bank.toLowerCase()) || 
+                    option.bank.toLowerCase().includes(bank.bank.toLowerCase())
+                  );
+                  
+                  if (!selectedBankDetails) {
+                    console.error('Bank not found:', option.bank);
+                    return;
+                  }
+                  
+                  console.log('Selected Bank Details:', selectedBankDetails);
+                  
+                  // Generiranje amortizacijskog plana za odabranu banku
+                  const currentPrincipal = Number(currentLoan.remainingDebt);
+                  const currentInterestRate = Number(currentLoan.interestRate);
+                  const currentTermMonths = Number(currentLoan.repaymentTerm);
+                  const newInterestRate = Number(option.interestRate);
+
+                  const amortizationData = generateAmortizationSchedule(
+                    currentPrincipal, 
+                    newInterestRate, 
+                    currentTermMonths
+                  );
+
+                  console.log('Amortization Schedule Parameters:', {
+                    principal: currentPrincipal,
+                    interestRate: newInterestRate,
+                    termMonths: currentTermMonths
+                  });
+                  console.log('Generated Amortization Data:', amortizationData);
+
+                  // Generiranje kumulativne uštede
+                  const currentTotalCost = calculateLoanCosts(
+                    currentPrincipal, 
+                    currentInterestRate, 
+                    currentTermMonths
+                  );
+
+                  const newTotalCost = calculateLoanCosts(
+                    currentPrincipal, 
+                    newInterestRate, 
+                    currentTermMonths
+                  );
+
+                  const cumulativeSavingsData = Array.from({length: Math.ceil(currentTermMonths/12)}, (_, index) => ({
+                    year: index + 1,
+                    'Trenutni kredit': currentTotalCost.totalCost,
+                    'Refinanciranje': newTotalCost.totalCost,
+                    'Kumulativna ušteda': currentTotalCost.totalCost - newTotalCost.totalCost
+                  }));
+
+                  console.log('Cumulative Savings Data:', cumulativeSavingsData);
+
+                  setAmortizationData(amortizationData);
+                  setCumulativeSavingsData(cumulativeSavingsData);
+                  setSelectedBank(option.bank);
+                }}
+              >
+                {/* Postojeći sadržaj kartice */}
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-lg font-semibold text-primary">
                     {option.bank}
@@ -652,36 +749,47 @@ function App() {
       {bestOption && (
         <div className="grid md:grid-cols-2 gap-6 mt-6">
           {/* Graf otplate */}
-          <div className="bg-white p-6 rounded-lg shadow">
-            <h3 className="text-xl font-semibold mb-4 text-primary">
-              Amortizacijski Plan
-              <InfoTooltip title="Amortizacijski Plan" description={AMORTIZATION_DESCRIPTION} />
-            </h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={bestOption.amortizationSchedule}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis 
-                  dataKey="month" 
-                  label={{ value: 'Mjesec', position: 'insideBottom', offset: -5 }}
-                />
-                <YAxis 
-                  label={{ 
-                    value: 'Preostali Dug (€)', 
-                    angle: -90, 
-                    position: 'insideLeft' 
-                  }}
-                />
-                <Tooltip />
-                <Line 
-                  type="monotone" 
-                  dataKey="remainingBalance" 
-                  stroke="#3B82F6" 
-                  strokeWidth={2}
-                  name="Preostali Dug"
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+          {amortizationData && amortizationData.length > 0 ? (
+            <div className="bg-white p-6 rounded-lg shadow">
+              <h3 className="text-xl font-semibold mb-4 text-primary">
+                Amortizacijski Plan
+                <InfoTooltip title="Amortizacijski Plan" description={AMORTIZATION_DESCRIPTION} />
+              </h3>
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={amortizationData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis 
+                    dataKey="month" 
+                    label={{ value: 'Mjesec', position: 'insideBottom', offset: -5 }}
+                  />
+                  <YAxis 
+                    label={{ 
+                      value: 'Preostali Dug (€)', 
+                      angle: -90, 
+                      position: 'insideLeft' 
+                    }}
+                  />
+                  <Tooltip 
+                    formatter={(value, name) => [
+                      `€${value.toFixed(2)}`, 
+                      name
+                    ]}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="remainingBalance" 
+                    stroke="#3B82F6" 
+                    strokeWidth={2}
+                    name="Preostali Dug"
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <div className="text-center text-gray-500 my-4">
+              <p>Nema dovoljno podataka za prikaz amortizacijskog plana.</p>
+            </div>
+          )}
 
           {/* Graf uštede */}
           {cumulativeSavingsData && cumulativeSavingsData.length > 0 ? (
