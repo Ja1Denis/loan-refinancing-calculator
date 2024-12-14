@@ -5,7 +5,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint . --ext .js,.jsx --fix",
+    "format": "prettier --write \"src/**/*.{js,jsx,css}\"",
+    "analyze": "source-map-explorer 'dist/assets/*.js'",
+    "test": "vitest",
+    "performance": "lighthouse http://localhost:5174 --view"
   },
   "dependencies": {
     "axios": "^1.7.9",
@@ -20,7 +25,15 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.0.0",
     "autoprefixer": "^10.4.14",
+    "eslint": "^8.38.0",
+    "eslint-plugin-react": "^7.32.2",
+    "lighthouse": "^10.0.0",
     "postcss": "^8.4.23",
-    "vite": "^4.3.3"
+    "prettier": "^2.8.7",
+    "source-map-explorer": "^2.5.3",
+    "vite": "^4.3.3",
+    "vite-plugin-compression": "^0.5.1",
+    "vite-plugin-pwa": "^0.16.4",
+    "vitest": "^0.30.1"
   }
 }
